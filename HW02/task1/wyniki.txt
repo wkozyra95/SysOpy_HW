@@ -1,0 +1,31 @@
+4 bajty x 2000 rekordów
+lib     real: 2.159476  user: 0.344000  sys: 1.816000
+sys     real: 1.592681  user: 0.080000  sys: 1.512000
+
+4 bajty x 5000 rekordów
+lib     real: 13.158990 user: 2.100000  sys: 11.056000
+sys     real: 9.641383  user: 0.448000  sys: 9.192000
+
+512 bajtów x 2000 rekordów
+lib     real: 2.182102  user: 0.408000  sys: 1.772000
+sys     real: 1.625049  user: 0.088000  sys: 1.536000
+
+512 bajtów x 5000 rekordów
+lib     real: 13.646405 user: 2.404000  sys: 11.240000
+sys     real: 10.156265 user: 0.444000  sys: 9.712000
+
+4096 bajtów x 2000 rekordów
+lib     real: 2.089634  user: 0.180000  sys: 1.908000
+sys     real: 1.976464  user: 0.068000  sys: 1.908000
+
+4096 bajtów x 5000 rekordów
+lib     real: 14.830006 user: 1.472000  sys: 13.356000
+sys     real: 14.123330 user: 0.556000  sys: 13.564000
+
+8192 bajtów x 2000 rekordów
+lib     real: 3.785351  user: 0.180000  sys: 3.604000
+sys     real: 3.882256  user: 0.088000  sys: 3.792000
+
+8192 bajtów x 5000 rekordów
+lib     real: 26.018086 user: 1.568000  sys: 24.448000
+sys     real: 24.753041 user: 0.612000  sys: 24.140000
