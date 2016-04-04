@@ -81,6 +81,6 @@ void sig_stp(int sig){
 
 void sig_int(int sig){
     free(reverse);
-    printf("exit\n");
+    printf("received SIGINT\nexit\n");
     exit(0);
 }

@@ -31,7 +31,8 @@ int main(int argc, char* argv []) {
     if (pid == 0) {
         execv(name[0], name);
         printf("error in execv\n");
-        exit(-1);
+        kill(getppid(), SIGUSR2);
+	exit(-1);
     }
     expected = (int) n_signals;
 
