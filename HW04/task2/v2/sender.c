@@ -79,6 +79,7 @@ void set_up() {
     if (pid == 0) {
         execv(name[0], name);
         printf("error in execv\n");
+        kill(getppid(), SIGUSR2);
         exit(-1);
     }
 

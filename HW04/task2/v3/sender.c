@@ -1,4 +1,3 @@
-#define _XOPEN_SOURCE 500
 #include <stdio.h>
 #include <stdlib.h>
 #include <errno.h>
@@ -32,31 +31,46 @@ int main(int argc, char* argv []) {
     if (pid == 0) {
         execv(name[0], name);
         printf("error in execv\n");
+        kill(getppid(), SIGRTMIN+1 );
         exit(-1);
     }
     expected = (int) n_signals;
 
+    sigset_t set;
+    sigemptyset(&set);
+    sigaddset(&set, SIGRTMIN);
+    sigaddset(&set, SIGRTMIN+1);
 
     struct sigaction usr1;
     usr1.sa_handler = count;
     usr1.sa_flags = 0;
+    usr1.sa_mask = set;
 
     struct sigaction usr2;
     usr2.sa_handler = sum_up_count;
     usr2.sa_flags = 0;
+    usr2.sa_mask = set;
 
     if(sigaction(SIGRTMIN, &usr1, NULL) == -1)
-        printf("can't catch SIGRTMIN");
-    if(sigaction(SIGRTMIN + 1, &usr2, NULL) == -1)
-        printf("can't catch SIGRTMIN + 1");
+        printf("can't catch SIGUSR1");
+    if(sigaction(SIGRTMIN+1, &usr2, NULL) == -1)
+        printf("can't catch SIGUSR2");
 
     sleep(1);
     printf("start sending %li signals\n", n_signals);
+    union sigval val;
     for (int i = 0; i < n_signals; i++){
-        kill(pid, SIGRTMIN);
+        if(sigqueue(pid, SIGRTMIN, val)!=0){
+            printf("too much signals\n");
+            kill(pid, SIGINT);
+            exit(0);
+        }
     }
-    kill(pid, SIGRTMIN + 1);
-
+    if(sigqueue(pid, SIGRTMIN+1, val)!=0){
+        printf("too much signals\n");
+        kill(pid, SIGINT);
+        exit(0);
+    }
 
     while(1){pause();}
     return 0;
