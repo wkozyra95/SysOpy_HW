@@ -30,9 +30,11 @@ int main(int argc, char* argv[]){
     pipe(fd);
     int pid= fork();
     if (pid == 0) {
+        close(fd[1]);
         dup2(fd[0], STDIN_FILENO);
         execvp(pipe_2[0], pipe_2);
     } else {
+        close(fd[0]);
         dup2(fd[1], STDOUT_FILENO);
         execvp(pipe_1[0], pipe_1);
     }
