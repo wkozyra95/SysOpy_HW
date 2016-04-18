@@ -1,14 +1,17 @@
 #include <stdio.h>
-#include <sys/msg.h>
 #include <stdlib.h>
 #include <signal.h>
 #include <mqueue.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <string.h>
 
 struct message{
     long mtype;
     int id;
     int number;
     int result;
+    char name[100];
 };
 typedef struct message message_t;
 
@@ -19,7 +22,7 @@ void exit_s(int sig){
     printf("Exit\n");
     exit(0);
 }
-
+int client_id;
 int client, server;
 char* client_path;
 
@@ -37,27 +40,34 @@ int main(int argc, char* argv[]){
     }
 
 
-    server = mq_open(path, O_RDONLY|O_CREAT);
+    server = mq_open(path, O_WRONLY);
     if(server == -1) {
-        printf("Unable to use or create queue\n");
+        printf("Unable to open queue %s\n", path);
         return -1;
     }
 
-    client = mq_open(client_path, O_RDONLY|O_CREAT);
+    message_t message;
+
+    struct mq_attr attr;
+    attr.mq_flags = 0;
+    attr.mq_maxmsg = 10;
+    attr.mq_msgsize = sizeof(message);
+    attr.mq_curmsgs = 0;
+
+    client = mq_open(argv[2], O_RDONLY| O_CREAT, 0666, &attr);
     if(client == -1) {
-        printf("Unable to create queue\n");
+        printf("Unable to create queue %s\n", client_path);
         return -1;
     }
 
     atexit(clean_up);
     signal(SIGINT, exit_s);
 
-    int client_id;
 
-    message_t message;
+
 
     message.mtype = 1;
-    message.id = client;
+    strcpy(message.name, client_path);
     if(mq_send(server, (char*)(&message), sizeof(message), 0) == -1){
         printf("Error while registering in server\n");
         return -1;
@@ -88,7 +98,7 @@ int main(int argc, char* argv[]){
             message.mtype = 3;
             message.id = client_id;
             message.result = isPrime(message.number);
-            if(msgsnd(server, (char*)(&message), sizeof(message), 0) == -1){
+            if(mq_send(server, (char*)(&message), sizeof(message), 0) == -1){
                 printf("Error\n");
                 return -1;
             }
@@ -108,6 +118,11 @@ int isPrime(int number) {
 }
 
 void clean_up(){
+    message_t message;
+    message.mtype = 4;
+    message.id = client_id;
+    mq_send(server, (char*)(&message), sizeof(message), 0);
+
     mq_close(client);
     mq_close(server);
     mq_unlink(client_path);
