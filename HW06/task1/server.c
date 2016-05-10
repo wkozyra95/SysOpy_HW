@@ -6,7 +6,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <limits.h>
-#include <time.h>
 #include <unistd.h>
 #include <signal.h>
 

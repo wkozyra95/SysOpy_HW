@@ -1,0 +1,26 @@
+a) skutki sygnałów dla wątków
+
+M HANDLE - wątek główny obsługuje sygnał
+N HANDLE - wątek poboczny obsługuje sygnał
+      | SIGUSR1       | SIGTERM       | SIGKILL       | SIGSTOP       |
+------|---------------|---------------|---------------|---------------|
+1     |     TERM      |     TERM      |     TERM      |    STOPED     |
+2     |  NO REACTION  |  NO REACTION  |     TERM      |    STOPED     |
+3     |    M HANDLE   |    M HANDLE   |     TERM      |    STOPED     |
+4     |  NO REACTION  |  NO REACTION  |     TERM      |    STOPED     |
+5     |   N HANDLE    |   N HANDLE    |     TERM      |    STOPED     |
+
+
+1 - sygnał do procesu, brak maskowania
+2 - sygnał do procesu, maskowany tylko wątek główny
+3 - sygnał do procesu, brak maskowania, własna obsługe sygnału
+4 - sygnał do wątku, z maskowaniem
+5 - sygnał do wątku, brak maskowania, własna obsługe sygnału
+
+b)
+Dzielenie przez zero spowodowało ubicie procesu:
+SIGFPE (Floating point exception)
+proces został zakończony
+
+Linux pc16 3.16.0-4-amd64 #1 SMP Debian 3.16.7-ckt25-2 (2016-04-08) x86_64 GNU/Linux
+MSI CX61-2PF
