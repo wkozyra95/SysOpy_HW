@@ -79,10 +79,10 @@ void communicate() {
     printf("Connection established\n");
     request_t broadcast;
     while(!finished) {
-        fd_set descriptors = P.descriptors;
+        fd_set descriptors;
         printf("incoming massage%s\n", P.server_addr.addr_un.sun_path);
         printf("Wait for select\n");
-        check(select(P.client_socket, &descriptors, NULL, NULL, NULL) <= 0, "Error select");
+        check(select(P.client_socket+1, &descriptors, NULL, NULL, NULL) <= 0, "Error select");
         printf("Selected\n");
 
         if (FD_ISSET(1000, &descriptors)) {
@@ -165,7 +165,7 @@ void* read_massages(void* data){
     while (true) {
 
         printf("Scan: \n");
-        fgets(current_massage.massage, 1024, stdin);
+        fgets(current_massage.massage, 4, stdin);
         if(strcmp(exit_com, current_massage.massage) == 0) break;
 
         if(C.server_type == LOCAL)
@@ -175,6 +175,7 @@ void* read_massages(void* data){
             sendto(P.client_socket, &current_massage, sizeof(request_t), 0,
                    (const struct sockaddr *) &P.server_addr.addr_in, sizeof(struct sockaddr_in));
         }
+
 
 
     }

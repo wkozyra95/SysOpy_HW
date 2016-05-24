@@ -15,8 +15,8 @@ typedef enum {
 } socket_type;
 
 typedef struct massage{
-    char user_name[100];
-    char massage[1024];
+    char user_name[5];
+    char massage[5];
 } request_t;
 
 
