@@ -11,8 +11,9 @@
 #include <unistd.h>
 #include <sys/un.h>
 #include <signal.h>
+#include <sys/select.h>
 
-#include "massages.h"
+#include "messages.h"
 
 typedef union {
     struct sockaddr_in addr_in;
@@ -37,7 +38,7 @@ struct {
     };
 } C;
 
-request_t current_massage;
+request_t current_message;
 
 struct {
     pthread_t thread;
@@ -51,7 +52,7 @@ bool new_message = false;
 bool finished = false;
 void parse_input_args(int argc, char *argv[]);
 void start_new_thread();
-void* read_massages(void *data);
+void* read_messages(void *data);
 void communicate();
 void setup_program();
 
@@ -80,21 +81,23 @@ void communicate() {
     request_t broadcast;
     while(!finished) {
         fd_set descriptors;
-        printf("incoming massage%s\n", P.server_addr.addr_un.sun_path);
+        FD_ZERO(&descriptors);
+        FD_SET(P.client_socket, &descriptors);
+        printf("incoming message%s\n", P.server_addr.addr_un.sun_path);
         printf("Wait for select\n");
         check(select(P.client_socket+1, &descriptors, NULL, NULL, NULL) <= 0, "Error select");
         printf("Selected\n");
 
-        if (FD_ISSET(1000, &descriptors)) {
+        if (FD_ISSET(P.client_socket, &descriptors)) {
             if (C.server_type == LOCAL) {
-                if (recvfrom(P.client_socket, &current_massage, sizeof(request_t), 0,
+                if (recvfrom(P.client_socket, &current_message, sizeof(request_t), 0,
                              (struct sockaddr *) &P.server_addr.addr_un, &unix_address_size) > 0) {
-                    printf("user: %s\t message: %s\n", broadcast.user_name, broadcast.massage);
+                    printf("user: %s\t message: %s\n", broadcast.user_name, broadcast.message);
                 }
             } else if (C.server_type == REMOTE) {
-                if (recvfrom(P.client_socket, &current_massage, sizeof(request_t), 0,
+                if (recvfrom(P.client_socket, &current_message, sizeof(request_t), 0,
                              (struct sockaddr *) &P.server_addr.addr_in, &inet_address_size) > 0) {
-                    printf("user: %s\t message: %s\n", broadcast.user_name, broadcast.massage);
+                    printf("user: %s\t message: %s\n", broadcast.user_name, broadcast.message);
                 }
             }
         }
@@ -149,30 +152,31 @@ int setup_local_communication() {
     strcpy(addr.sun_path, C.user_name);
     memcpy(&P.client_addr.addr_un, &addr, sizeof(struct sockaddr_un));
     check(bind(P.client_socket, (const struct sockaddr *) &addr, sizeof(addr)) != 0, "Error: unix socket bind");
+    printf("Sockets created\n");
     return P.client_socket;
 }
 
 void start_new_thread() {
-    if (pthread_create(&P.thread, NULL, read_massages, NULL) != 0) {
+    if (pthread_create(&P.thread, NULL, read_messages, NULL) != 0) {
         printf("Unable to create thread\n");
         exit(-1);
     }
 }
 
-void* read_massages(void* data){
+void* read_messages(void *data){
     sleep(1);
     char* exit_com = "exit\n";
     while (true) {
 
         printf("Scan: \n");
-        fgets(current_massage.massage, 4, stdin);
-        if(strcmp(exit_com, current_massage.massage) == 0) break;
+        fgets(current_message.message, 1024, stdin);
+        if(strcmp(exit_com, current_message.message) == 0) break;
 
         if(C.server_type == LOCAL)
-            sendto(P.client_socket, &current_massage, sizeof(request_t), 0,
+            sendto(P.client_socket, &current_message, sizeof(request_t), 0,
                    (const struct sockaddr *) &P.server_addr.addr_un, sizeof(struct sockaddr_un));
         else if(C.server_type == REMOTE) {
-            sendto(P.client_socket, &current_massage, sizeof(request_t), 0,
+            sendto(P.client_socket, &current_message, sizeof(request_t), 0,
                    (const struct sockaddr *) &P.server_addr.addr_in, sizeof(struct sockaddr_in));
         }
 
@@ -195,7 +199,7 @@ void parse_input_args(int argc, char *argv[]) {
     }
 
     C.user_name = argv[1];
-    strcpy(current_massage.user_name, argv[1]);
+    strcpy(current_message.user_name, argv[1]);
 
     if (argv[2][0] != LOCAL && argv[2][0] != REMOTE) {
         printf("Unknown type of server\n");

@@ -10,8 +10,9 @@
 #include <signal.h>
 #include <unistd.h>
 #include <time.h>
+#include <sys/select.h>
 
-#include "massages.h"
+#include "messages.h"
 
 #define N_CLIENTS 100
 int max(int a, int b){ return a>b?a:b; }
@@ -71,7 +72,6 @@ void communicate() {
     while(true) {
 
         check(select(C.max_fd+1, &C.descriptors, NULL, NULL, NULL) < 0, "Select: new messages");
-        printf("Select----------------------------\n");
 
         recv_state = recvfrom(C.unix_socket, &request, sizeof(request), MSG_DONTWAIT,
                               (struct sockaddr *) &unix_addr, &unix_address_size);
@@ -112,11 +112,10 @@ void unregister_client(struct sockaddr* addr) {
 
 
 void handle_message(struct sockaddr *addr, int socket, request_t *request) {
-    printf("Received massage:%s %s\n",request->user_name, request->massage);
+    printf("Received message:%s %s\n",request->user_name, request->message);
     bool new_client = true;
     for (int i = 0; i < N_CLIENTS; i++) {
-        request_t r;
-        memcpy(&r, request, sizeof(request_t));
+
         if (C.clients[i].client_state == DISCONNECTED) continue;
         //printf("Connected client counter\n");
         if(C.clients[i].type == UNIX){
@@ -124,10 +123,11 @@ void handle_message(struct sockaddr *addr, int socket, request_t *request) {
             if(memcmp(&C.clients[i].addr.addr_un, addr, sizeof(struct sockaddr_un)) == 0){
                 new_client = false;
                 C.clients[i].timestamp = time(NULL);
-                //printf("unix client updated\n");
+                printf("unix client updated\n");
             } else {
-                printf("Unix socket send %s\t %s to %s\n", r.user_name, r.massage, C.clients[i].addr.addr_un.sun_path);
-                check(sendto(C.unix_socket, &r, sizeof(request_t), 0,
+                C.clients[i].addr.addr_un.sun_family = AF_UNIX;
+                printf("Unix socket send message from %s to %s\n", request->user_name, C.clients[i].addr.addr_un.sun_path);
+                check(sendto(C.unix_socket, request, sizeof(request_t), 0,
                              (const struct sockaddr *) &C.clients[i].addr.addr_un,
                              sizeof(struct sockaddr_un)) == -1, "Unable to send\n");
             }
@@ -136,7 +136,7 @@ void handle_message(struct sockaddr *addr, int socket, request_t *request) {
                 new_client = false;
                 C.clients[i].timestamp = time(NULL);
             } else {
-                check(sendto(C.inet_socket, &r, sizeof(request_t), 0,
+                check(sendto(C.inet_socket, request, sizeof(request_t), 0,
                              (const struct sockaddr *) &C.clients[i].addr.addr_in,
                              sizeof(struct sockaddr_in)) == -1, "Unable to send\n");
             }
@@ -149,7 +149,7 @@ void handle_message(struct sockaddr *addr, int socket, request_t *request) {
 
 void delete_unactive_clients() {
     for (int i = 0; i< N_CLIENTS; i++){
-        if(C.clients[i].client_state == CONNECTED && time(NULL) - C.clients[i].timestamp > 30){
+        if(C.clients[i].client_state == CONNECTED && time(NULL) - C.clients[i].timestamp > 10){
             C.clients[i].client_state = DISCONNECTED;
         }
     }
@@ -161,7 +161,6 @@ void register_client(struct sockaddr *addr, socket_type type) {
         if(C.clients[i].client_state == DISCONNECTED) break;
     }
     if(i == N_CLIENTS) return;
-    printf("Client id%d\n", i);
     C.clients[i].client_state = CONNECTED;
     C.clients[i].timestamp = time(NULL);
     C.clients[i].type = type;

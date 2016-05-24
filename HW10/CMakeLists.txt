@@ -3,7 +3,7 @@ project(HW10 C)
 
 set(CMAKE_INSTALL_PREFIX ${CMAKE_SOURCE_DIR})
 set(CMAKE_C_COMPILER gcc)
-set(CMAKE_C_FLAGS  "${CMAKE_C_FLAGS} -std=gnu99 -g -Wall")
+set(CMAKE_C_FLAGS  "${CMAKE_C_FLAGS} -std=c99 -g -Wall")
 
 
 add_subdirectory(task1)

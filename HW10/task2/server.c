@@ -12,7 +12,7 @@
 #include <time.h>
 
 #include "massages.h"
-#include "../task1/massages.h"
+#include "../task1/messages.h"
 
 #define N_CLIENTS 100
 int max(int a, int b){ return a>b?a:b; }
