@@ -9,240 +9,220 @@
 #include <arpa/inet.h>
 #include <signal.h>
 #include <unistd.h>
-#include <time.h>
 #include <sys/select.h>
-
+#include <pthread.h>
 #include "messages.h"
 
-#define N_CLIENTS 100
-int max(int a, int b){ return a>b?a:b; }
+#define MAX_CLIENTS 100
+
+int max(int a, int b){ return a > b ? a : b; }
 void check(bool condition, char* msg) {if(condition){printf("%s\n", msg);}}
 
-socklen_t unix_address_size = sizeof(struct sockaddr_un);
-socklen_t inet_address_size = sizeof(struct sockaddr_in);
+typedef union {
+    struct sockaddr_in addr_in;
+    struct sockaddr_un addr_un;
+} client_address_t;
 
-
-typedef struct  {
-    state_t client_state;
-    time_t timestamp;
+typedef struct {
+    connection_state state;
     socket_type type;
-    union {
-        struct sockaddr_in addr_in;
-        struct sockaddr_un addr_un;
-    } addr;
+    client_address_t address;
+    time_t timestamp;
+    char name[MAX_USERNAME];
 } client_t;
 
+
 struct {
-    uint16_t port;
-    char* socket_path;
-    fd_set descriptors;
-    int unix_socket;
-    int inet_socket;
-    int max_fd;
-    client_t clients[N_CLIENTS];
+    struct {
+        int fd;
+        struct sockaddr_un addr;
+    } socket_un;
+    struct {
+        int fd;
+        struct sockaddr_in addr;
+    } socket_in;
+    client_t clients[MAX_CLIENTS];
 } C;
 
-void setup_program();
-void parse_arguments(int argc, char **argv);
-void setup_communication() ;
-void communicate();
+void parse_cmd(int argc, char **argv);
+void setup_server();
+
+void run_server();
 
 int main(int argc, char* argv[]) {
-    setup_program();
-    parse_arguments(argc, argv);
+    printf("Parse cmd\n");
+    parse_cmd(argc, argv);
 
-    setup_communication();
-    communicate();
+    printf("Setup server\n");
+    setup_server();
 
-    return 0;
+    printf("Run server\n");
+    run_server();
+
+
 }
 
-void handle_message(struct sockaddr *fd, int i, request_t *pMassage);
-void register_client(struct sockaddr *server_socket, socket_type param);
-void delete_unactive_clients();
+void handle_request(request_t request, struct sockaddr *addr, socket_type type);
 
-void unregister_client(struct sockaddr* addr);
+void remove_clients_with_timeout(fd_set *ptr);
 
-void communicate() {
-
-    request_t request;
-    struct sockaddr_in inet_addr;
-    struct sockaddr_un unix_addr;
-    ssize_t recv_state;
-    while(true) {
-
-        check(select(C.max_fd+1, &C.descriptors, NULL, NULL, NULL) < 0, "Select: new messages");
-
-        recv_state = recvfrom(C.unix_socket, &request, sizeof(request), MSG_DONTWAIT,
-                              (struct sockaddr *) &unix_addr, &unix_address_size);
-        if(recv_state > 0){
-            handle_message((struct sockaddr *) &unix_addr, C.unix_socket, &request);
-        } else if (recv_state == 0) {
-            unregister_client((struct sockaddr*) &unix_addr);
+void run_server() {
+    fd_set sockets_set;
+    FD_ZERO(&sockets_set);
+    FD_SET(C.socket_un.fd, &sockets_set);
+    FD_SET(C.socket_in.fd, &sockets_set);
+    int maxfd = max(C.socket_un.fd, C.socket_in.fd);
+    while(true){
+        struct timeval tm;
+        tm.tv_sec = 1;
+        tm.tv_usec = 0;
+        fd_set sockets = sockets_set;
+        select(maxfd+1, &sockets, NULL, NULL, &tm);
+        if(FD_ISSET(C.socket_in.fd, &sockets)){
+            request_t request;
+            struct sockaddr_in addr;
+            socklen_t addr_size = sizeof(struct sockaddr_in);
+            check(
+                    recvfrom(C.socket_in.fd, &request, sizeof(request_t), MSG_DONTWAIT, (struct sockaddr *) &addr, &addr_size) <= 0,
+                    "Unable to recv message"
+            );
+            handle_request(request, (struct sockaddr *) &addr, INET);
         }
+        if(FD_ISSET(C.socket_un.fd, &sockets)){
+            request_t request;
+            struct sockaddr_un addr;
+            socklen_t addr_size = sizeof(struct sockaddr_un);
+            check(
+                    recvfrom(C.socket_un.fd, &request, sizeof(request_t), MSG_DONTWAIT, (struct sockaddr *) &addr, &addr_size) <= 0,
+                    "Unable to recv message"
+            );
 
-        recv_state = recvfrom(C.inet_socket, &request, sizeof(request), MSG_DONTWAIT,
-                              (struct sockaddr *) &inet_addr, &inet_address_size);
-        if(recv_state > 0){
-            handle_message((struct sockaddr *) &inet_addr, C.inet_socket, &request);
-        } else if (recv_state == 0) {
-            unregister_client((struct sockaddr*) &inet_addr);
+            handle_request(request, (struct sockaddr *) &addr, UNIX);
         }
-
-        delete_unactive_clients();
+        remove_clients_with_timeout(NULL);
     }
+
 }
 
-void unregister_client(struct sockaddr* addr) {
-    printf("Unregistered client\n");
-    for (int i = 0; i< N_CLIENTS; i++){
-        if(C.clients[i].client_state == CONNECTED){
-            if(C.clients[i].type == UNIX &&
-               memcmp(&C.clients[i].addr.addr_un, addr, sizeof(struct sockaddr_un))){
-                C.clients[i].client_state = DISCONNECTED;
+void remove_clients_with_timeout(fd_set *ptr) {
+    for(int i = 0; i<MAX_CLIENTS; i++) {
+        client_t *client = C.clients + i;
+        if (client->state == DISCONNECTED) continue;
+
+        if (time(NULL) - client->timestamp > 15){
+            client->state = DISCONNECTED;
+            printf("Client %s disconected\n", client->name);
+        }
+    }
+
+
+}
+
+int get_fd(client_t* client){ return client->type == UNIX ? C.socket_un.fd : C.socket_in.fd;}
+struct sockaddr* get_addr(client_t* client){
+    return client->type == UNIX
+           ? (struct sockaddr*) &client->address.addr_un
+           : (struct sockaddr*) &client->address.addr_in;}
+
+socklen_t get_addr_size(client_t* client){
+    return client->type == UNIX
+           ? sizeof(struct sockaddr_un)
+           : sizeof(struct sockaddr_in);}
+
+void handle_request(request_t request, struct sockaddr *addr, socket_type type) {
+    bool is_client_registered = false;
+    for(int i = 0; i<MAX_CLIENTS; i++){
+        client_t* client = C.clients + i;
+        if(client->state == DISCONNECTED) continue;
+        if(strcmp(client->name, request.username) == 0){
+            is_client_registered = true;
+            client->timestamp = time(NULL);
+        } else {
+            check(
+                    sendto(get_fd(client), &request, sizeof(request_t), 0, get_addr(client), get_addr_size(client)) <= 0,
+                    "Unable to send broadcast"
+            );
+        }
+    }
+    if(!is_client_registered){
+        for(int i = 0; i<MAX_CLIENTS; i++) {
+            client_t* client = C.clients + i;
+            if(client->state == DISCONNECTED) {
+                client->type = type;
+                if(type == UNIX){
+                    client->address.addr_un.sun_family = AF_UNIX;
+                    strcpy(client->address.addr_un.sun_path, request.username);
+                } else {
+                    struct sockaddr_in* addr_in = (struct sockaddr_in *) addr;
+                    client->address.addr_in.sin_family = AF_INET;
+                    client->address.addr_in.sin_addr.s_addr = addr_in->sin_addr.s_addr;
+                    client->address.addr_in.sin_port = addr_in->sin_port;
+                }
+                client->state = CONNECTED;
+                client->timestamp = time(NULL);
+                strcpy(client->name, request.username);
+                printf("New client registered %s\n", request.username);
                 break;
-            } else if (C.clients[i].type == INET &&
-                       memcmp(&C.clients[i].addr.addr_in, addr, sizeof(struct sockaddr_in))){
-                C.clients[i].client_state = DISCONNECTED;
-                break;
             }
         }
     }
+
 }
 
-
-void handle_message(struct sockaddr *addr, int socket, request_t *request) {
-    printf("Received message:%s %s\n",request->user_name, request->message);
-    bool new_client = true;
-    for (int i = 0; i < N_CLIENTS; i++) {
-
-        if (C.clients[i].client_state == DISCONNECTED) continue;
-        //printf("Connected client counter\n");
-        if(C.clients[i].type == UNIX){
-
-            if(memcmp(&C.clients[i].addr.addr_un, addr, sizeof(struct sockaddr_un)) == 0){
-                new_client = false;
-                C.clients[i].timestamp = time(NULL);
-                printf("unix client updated\n");
-            } else {
-                C.clients[i].addr.addr_un.sun_family = AF_UNIX;
-                printf("Unix socket send message from %s to %s\n", request->user_name, C.clients[i].addr.addr_un.sun_path);
-                check(sendto(C.unix_socket, request, sizeof(request_t), 0,
-                             (const struct sockaddr *) &C.clients[i].addr.addr_un,
-                             sizeof(struct sockaddr_un)) == -1, "Unable to send\n");
-            }
-        } else if(C.clients[i].type == INET) {
-            if (memcmp(&C.clients[i].addr.addr_un, addr, sizeof(struct sockaddr_in)) == 0) {
-                new_client = false;
-                C.clients[i].timestamp = time(NULL);
-            } else {
-                check(sendto(C.inet_socket, request, sizeof(request_t), 0,
-                             (const struct sockaddr *) &C.clients[i].addr.addr_in,
-                             sizeof(struct sockaddr_in)) == -1, "Unable to send\n");
-            }
-        }
+void setup_cleanup();
+void setup_connection_unix();
+void setup_connection_inet();
+void setup_server() {
+    setup_cleanup();
+    for(int i = 0; i<MAX_CLIENTS; i++){
+        C.clients[i].state = DISCONNECTED;
     }
-    if(new_client){
-        register_client(addr, ((socket == C.unix_socket) ? UNIX : INET));
-    }
+    setup_connection_unix();
+    setup_connection_inet();
 }
 
-void delete_unactive_clients() {
-    for (int i = 0; i< N_CLIENTS; i++){
-        if(C.clients[i].client_state == CONNECTED && time(NULL) - C.clients[i].timestamp > 10){
-            C.clients[i].client_state = DISCONNECTED;
-        }
-    }
+void setup_connection_inet() {
+    C.socket_in.addr.sin_family = AF_INET;
+    C.socket_in.addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+
+    C.socket_in.fd = socket(AF_INET, SOCK_DGRAM, 0);
+    check(C.socket_in.fd <= 0, "Illegal file decriptor");
+    check(bind(C.socket_in.fd, (struct sockaddr *) &C.socket_in.addr, sizeof(struct sockaddr_in)) != 0,
+          "bind unsuccessful\n");
 }
 
-void register_client(struct sockaddr *addr, socket_type type) {
-    int i;
-    for(i = 0; i<N_CLIENTS; i++){
-        if(C.clients[i].client_state == DISCONNECTED) break;
-    }
-    if(i == N_CLIENTS) return;
-    C.clients[i].client_state = CONNECTED;
-    C.clients[i].timestamp = time(NULL);
-    C.clients[i].type = type;
-    if(type == UNIX)
-        memcpy(&C.clients[i].addr.addr_un, addr, sizeof(struct sockaddr_un));
-    else
-        memcpy(&C.clients[i].addr.addr_in, addr, sizeof(struct sockaddr_in));
+void setup_connection_unix() {
+
+    C.socket_un.addr.sun_family = AF_UNIX;
+
+    C.socket_un.fd = socket(AF_UNIX, SOCK_DGRAM, 0);
+    check(C.socket_un.fd <= 0, "Illegal file decriptor");
+    check(bind(C.socket_un.fd, (struct sockaddr *) &C.socket_un.addr, sizeof(struct sockaddr_un)) != 0,
+          "bind unsuccessful\n");
+
 }
 
 
-int create_inet_socket();
-int create_unix_socket();
-
-void setup_communication() {
-    for(int i =0 ;i<N_CLIENTS; i++){
-        C.clients[i].client_state = DISCONNECTED;
-    }
-    FD_ZERO(&C.descriptors);
-    C.inet_socket = create_inet_socket();
-    C.unix_socket = create_unix_socket();
-    FD_SET(C.inet_socket, &C.descriptors);
-    FD_SET(C.unix_socket, &C.descriptors);
-    C.max_fd = max(C.unix_socket, C.inet_socket);
-    printf("Server ready\n");
+void cleanup_client_connections(){
+    close(C.socket_un.fd);
+    close(C.socket_in.fd);
+    unlink(C.socket_un.addr.sun_path);
+}
+void close_client(int sig) { exit(0); }
+void setup_cleanup() {
+    signal(SIGINT, close_client);
+    atexit(cleanup_client_connections);
 }
 
-int create_unix_socket() {
-    unlink(C.socket_path);
-    int socket_fd = socket(AF_UNIX, SOCK_DGRAM, 0);
-
-    struct sockaddr_un addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sun_family = AF_UNIX;
-    strcpy(addr.sun_path, C.socket_path);
-
-    check(bind(socket_fd, (const struct sockaddr *) &addr, sizeof(addr)) != 0, "Error: unix socket bind");
-    return socket_fd;
-}
-
-int create_inet_socket() {
-    int socket_fd = socket(AF_INET, SOCK_DGRAM , 0);
-
-    struct sockaddr_in addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(C.port);
-    addr.sin_addr.s_addr = htonl(INADDR_ANY);
-
-    check(bind(socket_fd, (const struct sockaddr *) &addr, sizeof(addr)) != 0, "Error: remote socket bind");
-    return socket_fd;
-}
-
-void parse_arguments(int argc, char **argv) {
+void parse_cmd(int argc, char **argv) {
     if(argc != 3){
         printf("Wrong number of arguments\n");
         exit(-1);
     }
-    char* to_int_error;
-    long port_val = strtol(argv[1], &to_int_error, 10);
-    if(errno == ERANGE || 0 != strcmp(to_int_error, "\0") || port_val < 0 || port_val > 20000) {
-        printf("Wrong port number\n");
-        exit(-1);
-    }
-    C.port = (uint16_t) port_val;
-    C.socket_path = argv[2];
-}
 
-void cleanup(){
-    FD_CLR(C.unix_socket, &C.descriptors);
-    close(C.unix_socket);
-    FD_CLR(C.inet_socket, &C.descriptors);
-    close(C.inet_socket);
-    unlink(C.socket_path);
-}
+    C.socket_in.addr.sin_port = htons((uint16_t) strtol(argv[1], NULL, 10));
+    check(errno != 0 || C.socket_in.addr.sin_port < 0, "Incorrect port number");
 
-void exit_sig(int sig);
-void setup_program() {
-    signal(SIGINT, exit_sig);
-    atexit(cleanup);
-}
-
-void exit_sig(int sig) {
-    printf("Exit\n");
-    exit(0);
+    check(strlen(argv[2]) >= MAX_SOCKET_PATH, "Too long socket path");
+    strcpy(C.socket_un.addr.sun_path, argv[2]);
 }

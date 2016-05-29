@@ -2,192 +2,215 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <stdbool.h>
-#include <pthread.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/un.h>
 #include <netdb.h>
 #include <arpa/inet.h>
-#include <limits.h>
+#include <signal.h>
 #include <unistd.h>
-#include <sys/un.h>
+#include <sys/select.h>
+#include <pthread.h>
+#include "messages.h"
 
-#include "massages.h"
 
-void check(bool condition, char* msg) {if(condition){printf("%s\n", msg);}}
+int max(int a, int b){ return a > b ? a : b; }
+void check(bool condition, char* msg) {if(condition){printf("%s\n", msg);exit(-1);}}
 
+typedef union {
+    struct {
+        struct in_addr ip;
+        uint16_t port;
+    };
+    char socket_path[100];
+} server_data_t;
+
+typedef union {
+    struct sockaddr_in addr_in;
+    struct sockaddr_un addr_un;
+} address_t;
 
 struct {
-    char* user_name;
-    char server_type;
-    union {
-        char* socket_path;
-        struct {
-            in_addr_t ip;
-            uint16_t port;
-        };
-    };
+    socket_type server_type;
+    char username[MAX_USERNAME];
+    address_t addr;
+    server_data_t server;
+    int socket_fd;
 } C;
 
-request_t current_massage;
+void parse_cmd(int argc, char **argv);
+void setup_client();
+void run_client();
 
-struct {
-    pthread_t thread;
-    int com_socket;
-    int reg_socket;
-} P;
+int main(int argc, char* argv[]){
+    printf("Parse cmd args\n");
+    parse_cmd(argc, argv);
 
-bool new_message = false;
-bool finished = false;
-void parse_input_args(int argc, char *argv[]);
-void start_new_thread();
-void* read_massages(void *data);
-void communicate();
+    printf("Setup client\n");
+    setup_client();
 
+    printf("Run client\n");
+    run_client();
 
-int main(int argc, char* argv[]) {
-    parse_input_args(argc, argv);
-    start_new_thread();
-    printf("Client started\n");
-
-    communicate();
-    pthread_join(P.thread, NULL);
-    printf("Exit\n");
-    return 0;
 }
 
-int setup_communication();
-int setup_local_communication();
-int setup_remote_communication();
+void* run_receiver(void* data);
+void* run_sender(void* data);
+void run_client() {
+    pthread_t sender;
+    pthread_create(&sender, NULL, run_sender, NULL);
+    pthread_t receiver;
+    pthread_create(&receiver, NULL, run_receiver, NULL);
 
-void communicate() {
-    int fd = setup_communication();
-    printf("Connection established\n");
-    struct response server_response;
-    while(!finished){
+    pthread_join(sender, NULL);
+    pthread_join(receiver, NULL);
+}
 
-        if ( write(fd, &current_massage, sizeof(current_massage)) == -1){
-            printf("Error while sending data\n");
-        }
-        printf("Massage sent\n");
-        if (read(fd, &server_response, sizeof(server_response)) == -1){
-            printf("Error while sending data\n");
-        }
-        printf("response: %s\n", server_response.correct);
-        new_message = false;
+struct sockaddr* get_server_address(){
+    if(C.server_type == UNIX)
+        return (struct sockaddr *) &C.addr.addr_un;
+    else
+        return (struct sockaddr *) &C.addr.addr_in;
+}
+
+socklen_t get_server_address_size(){
+    if(C.server_type == UNIX)
+        return sizeof(struct sockaddr_un);
+    else
+        return sizeof(struct sockaddr_in);
+}
+
+void* run_sender(void* data){
+    request_t new_request;
+    strcpy(new_request.username, C.username);
+    while(true){
+        fgets(new_request.message_body, MAX_MESSAGE, stdin);
+        check(
+                send(C.socket_fd, &new_request, sizeof(request_t), 0) <= 0,
+                "Unable to send"
+        );
     }
-    close(fd);
 }
 
-int setup_communication() {
-    if(C.server_type == LOCAL){
-        return setup_local_communication();
+void* run_receiver(void* data){
+    request_t received_broadcast;
+
+    while(true){
+        fd_set fd_listener;
+        FD_ZERO(&fd_listener);
+        FD_SET(C.socket_fd, &fd_listener);
+
+        check(
+                select(C.socket_fd+1, &fd_listener, NULL, NULL, NULL) <= 0,
+                "Error in select"
+        );
+
+        if(FD_ISSET(C.socket_fd, &fd_listener)) {
+            ssize_t result = recv(C.socket_fd, &received_broadcast, sizeof(request_t), MSG_DONTWAIT);
+            check(result < 0, "Unable to receive message");
+            if (result > 0) {
+                printf("Received broadcast\n user: %s\n message:%s",
+                       received_broadcast.username, received_broadcast.message_body);
+            } else {
+                printf("Server disconnected\n");
+                exit(0);
+            }
+        }
+
+
+    }
+
+}
+
+void setup_cleanup();
+void setup_connection_unix();
+void setup_connection_inet() ;
+
+void setup_client() {
+    srand((unsigned int) time(NULL));
+    setup_cleanup();
+    if(C.server_type == UNIX){
+        setup_connection_unix();
+    } else if (C.server_type == INET) {
+        setup_connection_inet();
     } else {
-        return setup_remote_communication();
-    }
-
-}
-
-int setup_remote_communication() {
-    printf("Create inet_socket ip: %d port: %d\n", C.ip, C.port);
-    P.reg_socket = socket(AF_INET, SOCK_DGRAM, 0);
-    check(P.reg_socket <= 0, "Error: illegal file descriptor(remote server socket)");
-    struct sockaddr_in addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons( C.port);
-    addr.sin_addr.s_addr = C.ip;
-    int fd = connect(P.reg_socket, (const struct sockaddr *) &addr, sizeof(addr));
-    check(fd != 0, "Error: illegal file descriptor(remote socket)");
-    return P.reg_socket;
-}
-
-int setup_local_communication() {
-    printf("Create unix_socket path: %s\n", C.socket_path);
-    P.reg_socket = socket(AF_UNIX, SOCK_DGRAM, 0);
-    check(P.reg_socket <= 0, "Error: illegal file descriptor(local server socket)");
-    struct sockaddr_un addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sun_family = AF_UNIX;
-    strcpy(addr.sun_path,C.socket_path);
-    int fd = connect(P.reg_socket, (const struct sockaddr *) &addr, sizeof(addr));
-    check(fd != 0, "Error: illegal file descriptor(local socket)");
-    return P.reg_socket;
-}
-
-void start_new_thread() {
-
-    if (pthread_create(&P.thread, NULL, read_massages, NULL) != 0) {
-        printf("Unable to create thread\n");
+        printf("Wrong server type\n");
         exit(-1);
     }
-
 }
 
-void* read_massages(void* data){
-    sleep(1);
-    char* input = malloc(1024);
-    char* exit_com = "exit\n";
-    while (true) {
+void setup_connection_inet() {
 
-        printf("Scan: \n");
-        fgets(input, 1024, stdin);
-        if(strcmp(exit_com, input) == 0) break;
-        strcpy(current_massage.massage, input);
-        new_message = true;
-        while(new_message);
+    C.addr.addr_in.sin_family = AF_INET;
+    C.addr.addr_in.sin_addr = C.server.ip;
+    C.addr.addr_in.sin_port = htons(C.server.port);
 
-    }
-    finished = true;
-    return NULL;
+    struct sockaddr_in client;
+    client.sin_family = AF_INET;
+    client.sin_port = htons(C.server.port  + (uint16_t)(rand()%100));
+    client.sin_addr.s_addr = inet_addr("127.0.0.1");
+
+    C.socket_fd = socket(AF_INET, SOCK_STREAM, 0);
+    check(C.socket_fd <= 0, "Illegal file decriptor");
+    check(bind(C.socket_fd, (struct sockaddr *) &client, sizeof(struct sockaddr_in)) != 0,
+          "bind unsuccessful\n");
+    check(connect(C.socket_fd, (const struct sockaddr *) &C.addr.addr_in,
+                  sizeof(struct sockaddr_in)) == -1, "Unable to connect");
 }
 
-bool check_socket(char *socket_path);
-bool check_ip(char *ip_address, char* port);
 
-void parse_input_args(int argc, char *argv[]) {
-    if (argc<3 || (argv[2][0] != LOCAL && argv[2][0] != REMOTE) ||
-            (argc == 4 && argv[2][0] != LOCAL) ||
-            (argc == 5 && argv[2][0] != REMOTE)) {
+void setup_connection_unix() {
+
+    C.addr.addr_un.sun_family = AF_UNIX;
+    strcpy(C.addr.addr_un.sun_path, C.server.socket_path);
+
+    struct sockaddr_un client;
+    client.sun_family = AF_UNIX;
+    strcpy(client.sun_path, C.username);
+
+    C.socket_fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    check(C.socket_fd <= 0, "Illegal file decriptor");
+    check(bind(C.socket_fd, (struct sockaddr *) &client, sizeof(struct sockaddr_un)) != 0,
+          "bind unsuccessful\n");
+    check(connect(C.socket_fd, (const struct sockaddr *) &C.addr.addr_un,
+                  sizeof(struct sockaddr_un)) == -1, "Unable to connect");
+}
+
+void cleanup_client_connections(){
+    //close(C.socket_fd);
+    unlink(C.username);
+}
+void close_client(int sig) { exit(-1); }
+void setup_cleanup() {
+    signal(SIGINT, close_client);
+    atexit(cleanup_client_connections);
+}
+
+void parse_cmd(int argc, char **argv) {
+    if(argc < 3){
         printf("Wrong number of arguments\n");
         exit(-1);
     }
 
-    C.user_name = argv[1];
-    strcpy(current_massage.user_name, argv[1]);
-
-    if (argv[2][0] != LOCAL && argv[2][0] != REMOTE) {
-        printf("Unknown type of server\n");
+    if((argv[2][0] == 'A' && argc != 4) ||
+       (argv[2][0] == 'B' && argc != 5) ||
+       (argv[2][0] != 'A' && argv[2][0] != 'B')){
+        printf("Wrong combination of arguments\n");
         exit(-1);
     }
-    C.server_type = argv[2][0];
 
-    if (C.server_type == LOCAL ){
-        check_socket(argv[3]);
-    } else if (C.server_type == REMOTE) {
-        check_ip(argv[3], argv[4]);
-    } else {
-        printf("Server not found\n");
+    if(strlen(argv[1]) >= MAX_USERNAME){
+        printf("Username too long\n");
         exit(-1);
     }
-}
+    strcpy(C.username, argv[1]);
 
-bool check_ip(char *ip_address, char* port) {
-    C.ip = inet_addr(ip_address);
-
-    char* to_int_error;
-    long port_val = strtol(port, &to_int_error, 10);
-
-    if(C.ip == ( in_addr_t)(-1) ||
-            (errno == ERANGE || 0 != strcmp(to_int_error, "\0") ||
-                    port_val < 0 || port_val > UINT16_MAX)){
-        printf("Illegal ip or port\n");
-        exit(-1);
+    if(argv[2][0] == 'A' && strlen(argv[3]) < MAX_SOCKET_PATH){
+        C.server_type = UNIX;
+        strcpy(C.server.socket_path, argv[3]);
+    } else if(argv[2][0] == 'B'){
+        C.server_type = INET;
+        check(inet_pton(AF_INET, argv[3], &C.server.ip) != 1, "Illegal ip");
+        C.server.port = ((uint16_t) strtol(argv[4], NULL, 10));
     }
-    C.port = (uint16_t) port_val;
-    return  true;
-}
-
-bool check_socket(char *socket_path) {
-    C.socket_path = socket_path;
-    return true;
 }
