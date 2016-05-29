@@ -79,15 +79,12 @@ void run_server() {
 
         fd_set sockets = sockets_set;
         int select_result = select(maxfd+1, &sockets, NULL, NULL, &tm);
-        printf("select : %d\n", errno);
         for(int fd = 0; fd<maxfd+1; fd++){
             if(!FD_ISSET(fd, &sockets)) continue;
             if(fd == C.socket_in.fd) {
                 struct sockaddr_in addr;
                 socklen_t addr_size = sizeof(struct sockaddr_in);
-                printf("test_startine\n");
                 int new_client_descriptor = accept(fd, (struct sockaddr *) &addr, &addr_size);
-                printf("test_stop inet\n");
                 check(new_client_descriptor <= 0 , "Illegal file descriptor inet");
                 maxfd = max(maxfd, new_client_descriptor);
                 FD_SET(new_client_descriptor, &sockets_set);
@@ -95,9 +92,7 @@ void run_server() {
             } else if (fd == C.socket_un.fd) {
                 struct sockaddr_un addr;
                 socklen_t addr_size = sizeof(struct sockaddr_un);
-                printf("test_start\n");
                 int new_client_descriptor = accept(fd, (struct sockaddr *) &addr, &addr_size);
-                printf("test_stop\n");
                 check(new_client_descriptor <= 0 , "Illegal file descriptor unix");
                 printf("%d\n",fd);
                 maxfd = max(maxfd, new_client_descriptor);
@@ -105,10 +100,7 @@ void run_server() {
                 register_client(new_client_descriptor, UNIX);
             } else {
                 request_t request;
-                printf("test_startww\n");
                 ssize_t result = recv(fd, &request, sizeof(request_t), MSG_DONTWAIT);
-
-                printf("test_stop rec\n");
                 if( result > 0){
                     handle_request(request, fd);
                 } else if(result == 0){
@@ -143,7 +135,7 @@ void remove_clients_with_timeout(fd_set *socket_set) {
         client_t *client = C.clients + i;
         if (client->state == DISCONNECTED) continue;
 
-        if (time(NULL) - client->timestamp > 10){
+        if (time(NULL) - client->timestamp > 20){
             client->state = DISCONNECTED;
             FD_CLR(client->fd, socket_set);
             close(client->fd);
